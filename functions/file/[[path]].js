@@ -4,6 +4,7 @@ import { TelegramAPI } from "../utils/telegramAPI";
 import { setCommonHeaders, setRangeHeaders, handleHeadRequest, getFileContent, isTgChannel,
             returnWithCheck, return404, isDomainAllowed } from './fileTools';
 import { getDatabase } from '../utils/databaseAdapter.js';
+import { OneDriveClient } from "../utils/onedriveClient.js";
 
 
 export async function onRequest(context) {  // Contents of context object
@@ -70,6 +71,11 @@ export async function onRequest(context) {  // Contents of context object
     /* S3渠道 */
     if (imgRecord.metadata?.Channel === "S3") {
         return await handleS3File(context, imgRecord.metadata, encodedFileName, fileType);
+    }
+
+    /* OneDrive渠道 */
+    if (imgRecord.metadata?.Channel === 'OneDrive') {
+        return await handleOneDriveFile(context, imgRecord.metadata, encodedFileName, fileType);
     }
 
     /* 外链渠道 */
@@ -462,5 +468,52 @@ async function handleS3File(context, metadata, encodedFileName, fileType) {
 
     } catch (error) {
         return new Response(`Error: Failed to fetch from S3 - ${error.message}`, { status: 500 });
+    }
+}
+
+async function handleOneDriveFile(context, metadata, encodedFileName, fileType) {
+    const { env, request, url, Referer } = context;
+
+    try {
+        const client = new OneDriveClient({
+            tenantId: metadata.OneDriveTenantId || env.ONEDRIVE_TENANT_ID,
+            clientId: metadata.OneDriveClientId || env.ONEDRIVE_CLIENT_ID,
+            clientSecret: metadata.OneDriveClientSecret || env.ONEDRIVE_CLIENT_SECRET,
+            driveId: metadata.OneDriveDriveId || env.ONEDRIVE_DRIVE_ID,
+            siteId: metadata.OneDriveSiteId || env.ONEDRIVE_SITE_ID,
+            userPrincipalName: metadata.OneDriveUserPrincipalName || env.ONEDRIVE_USER_PRINCIPAL_NAME
+        });
+
+        const response = await client.downloadContent(request, {
+            itemId: metadata.OneDriveItemId,
+            remotePath: metadata.OneDrivePath
+        });
+
+        if (response.status === 404) {
+            return await return404(url);
+        }
+
+        if (!response.ok && response.status !== 206 && response.status !== 304) {
+            return new Response('Error: Failed to fetch image', { status: response.status });
+        }
+
+        const headers = new Headers(response.headers);
+        setCommonHeaders(headers, encodedFileName, fileType || response.headers.get('Content-Type'), Referer, url);
+
+        if (request.method === 'HEAD') {
+            return new Response(null, {
+                status: response.status,
+                statusText: response.statusText,
+                headers
+            });
+        }
+
+        return new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers
+        });
+    } catch (error) {
+        return new Response('Error: Failed to fetch OneDrive file', { status: 500 });
     }
 }

@@ -2,6 +2,7 @@ import { S3Client, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { purgeCFCache } from "../../../utils/purgeCache";
 import { removeFileFromIndex, batchRemoveFilesFromIndex } from "../../../utils/indexManager.js";
 import { getDatabase } from '../../../utils/databaseAdapter.js';
+import { OneDriveClient } from "../../../utils/onedriveClient.js";
 
 export async function onRequest(context) {
     const { request, env, params, waitUntil } = context;
@@ -119,6 +120,10 @@ async function deleteFile(env, fileId, cdnUrl, url) {
             await deleteS3File(img);
         }
 
+        if (img.metadata?.Channel === 'OneDrive') {
+            await deleteOneDriveFile(env, img.metadata);
+        }
+
         // 删除数据库中的记录
         await db.delete(fileId);
 
@@ -168,6 +173,24 @@ async function deleteS3File(img) {
         return true;
     } catch (error) {
         console.error("S3 Delete Failed:", error);
+        return false;
+    }
+}
+
+async function deleteOneDriveFile(env, metadata) {
+    try {
+        const client = new OneDriveClient({
+            tenantId: metadata?.OneDriveTenantId || env.ONEDRIVE_TENANT_ID,
+            clientId: metadata?.OneDriveClientId || env.ONEDRIVE_CLIENT_ID,
+            clientSecret: metadata?.OneDriveClientSecret || env.ONEDRIVE_CLIENT_SECRET,
+            driveId: metadata?.OneDriveDriveId || env.ONEDRIVE_DRIVE_ID,
+            siteId: metadata?.OneDriveSiteId || env.ONEDRIVE_SITE_ID,
+            userPrincipalName: metadata?.OneDriveUserPrincipalName || env.ONEDRIVE_USER_PRINCIPAL_NAME
+        });
+        await client.deleteItem(metadata?.OneDriveItemId, metadata?.OneDrivePath);
+        return true;
+    } catch (error) {
+        console.error('OneDrive Delete Failed:', error);
         return false;
     }
 }

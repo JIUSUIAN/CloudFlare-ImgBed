@@ -1,6 +1,6 @@
 <div align="center">
     <a href="https://github.com/MarSeventh/CloudFlare-ImgBed"><img width="80%" alt="logo" src="static/readme/banner.png"/></a>
-    <p><em>🗂️Open-source file hosting solution, supporting Docker and serverless deployment, supporting multiple storage channels such as Telegram Bot, Cloudflare R2, S3, etc., supporting WebDAV protocol and various RESTful APIs.</em></p>
+    <p><em>🗂️Open-source file hosting solution, supporting Docker and serverless deployment, supporting multiple storage channels such as Telegram Bot, Cloudflare R2, S3, OneDrive, etc., supporting WebDAV protocol and various RESTful APIs.</em></p>
     <p>
         <a href="https://github.com/MarSeventh/CloudFlare-ImgBed/blob/main/README.md">简体中文</a> | <a href="https://github.com/MarSeventh/CloudFlare-ImgBed/blob/main/README_en.md">English</a> | <a
         href="https://cfbed.sanyue.de/en">Official Website</a>
@@ -119,6 +119,18 @@ Provides detailed deployment documentation, feature docs, development plans, upd
 - **Contributors**: Thanks to the following contributors for their selfless contributions!
 
   [![Contributors](https://contrib.rocks/image?repo=Marseventh/Cloudflare-ImgBed)](https://github.com/MarSeventh/CloudFlare-ImgBed/graphs/contributors)
+
+## OneDrive storage channel
+
+- **Azure application**: Create an application in Microsoft Entra ID, grant application permissions such as `Files.ReadWrite.All` and `offline_access`, and finish the admin consent flow.
+- **Environment variables**: Add the following variables to Pages/Workers or Docker to provision a default channel quickly:
+  - `ONEDRIVE_TENANT_ID`: Azure AD tenant ID.
+  - `ONEDRIVE_CLIENT_ID`: Application (client) ID.
+  - `ONEDRIVE_CLIENT_SECRET`: Client secret value.
+  - `ONEDRIVE_DRIVE_ID` (or `ONEDRIVE_SITE_ID` / `ONEDRIVE_USER_PRINCIPAL_NAME`): identifies the target drive; provide one of them.
+  - `ONEDRIVE_ROOT_PATH`: Optional base folder (e.g. `imgbed`).
+- **Admin console**: Navigate to “Dashboard -> System Settings -> Upload Settings” and add a channel whose `type` is `onedrive`. You can manage multiple drives, enable load balancing and limits through the UI.
+- **Feature set**: The OneDrive channel supports regular and chunked uploads, indexing, delete/move operations, and integrates with CDN/anti-leeching just like other storage backends.
 
 # 5. Star History
 

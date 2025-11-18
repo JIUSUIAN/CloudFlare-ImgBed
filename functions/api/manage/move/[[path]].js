@@ -2,6 +2,7 @@ import { S3Client, CopyObjectCommand, DeleteObjectCommand } from "@aws-sdk/clien
 import { purgeCFCache } from "../../../utils/purgeCache";
 import { moveFileInIndex, batchMoveFilesInIndex } from "../../../utils/indexManager.js";
 import { getDatabase } from '../../../utils/databaseAdapter.js';
+import { OneDriveClient, buildOneDriveRemotePath } from "../../../utils/onedriveClient.js";
 
 export async function onRequest(context) {
     const { request, env, params, waitUntil } = context;
@@ -161,6 +162,17 @@ async function moveFile(env, fileId, newFileId, cdnUrl, url) {
             }
         }
 
+        if (img.metadata?.Channel === 'OneDrive') {
+            const moveResult = await moveOneDriveFile(env, img.metadata, newFileId);
+            if (moveResult.success) {
+                img.metadata.OneDrivePath = moveResult.remotePath;
+                img.metadata.OneDriveItemId = moveResult.itemId;
+                img.metadata.OneDriveDriveId = moveResult.driveId || img.metadata.OneDriveDriveId;
+            } else {
+                throw new Error('Failed to move OneDrive file');
+            }
+        }
+
         // 旧版 Telegram 渠道和 Telegraph 渠道不支持移动
         if (img.metadata?.Channel === 'Telegram' || img.metadata?.Channel === undefined) {
             throw new Error('Unsupported Channel');
@@ -233,6 +245,36 @@ async function moveS3File(img, newFileId) {
         return { success: true, newKey };
     } catch (error) {
         console.error("S3 Move Failed:", error);
+        return { success: false, error: error.message };
+    }
+}
+
+async function moveOneDriveFile(env, metadata, newFileId) {
+    try {
+        const client = new OneDriveClient({
+            tenantId: metadata?.OneDriveTenantId || env.ONEDRIVE_TENANT_ID,
+            clientId: metadata?.OneDriveClientId || env.ONEDRIVE_CLIENT_ID,
+            clientSecret: metadata?.OneDriveClientSecret || env.ONEDRIVE_CLIENT_SECRET,
+            driveId: metadata?.OneDriveDriveId || env.ONEDRIVE_DRIVE_ID,
+            siteId: metadata?.OneDriveSiteId || env.ONEDRIVE_SITE_ID,
+            userPrincipalName: metadata?.OneDriveUserPrincipalName || env.ONEDRIVE_USER_PRINCIPAL_NAME
+        });
+
+        const remotePath = buildOneDriveRemotePath({ rootPath: metadata?.OneDriveRootPath }, newFileId);
+        const segments = remotePath.split('/');
+        const newName = segments.pop();
+        const newFolder = segments.join('/');
+
+        const response = await client.moveItem(metadata?.OneDriveItemId, newFolder, newName);
+
+        return {
+            success: true,
+            remotePath,
+            itemId: response?.id || metadata?.OneDriveItemId,
+            driveId: response?.parentReference?.driveId || metadata?.OneDriveDriveId
+        };
+    } catch (error) {
+        console.error('OneDrive Move Failed:', error);
         return { success: false, error: error.message };
     }
 }
