@@ -170,10 +170,51 @@ export async function getUploadConfig(db, env) {
     s3.loadBalance = s3LoadBalance
 
 
+    // =====================读取OneDrive渠道配置=====================
+    const onedrive = {}
+    const onedriveChannels = []
+    onedrive.channels = onedriveChannels
+    if (env.ONEDRIVE_CLIENT_ID && env.ONEDRIVE_CLIENT_SECRET && env.ONEDRIVE_TENANT_ID && (env.ONEDRIVE_DRIVE_ID || env.ONEDRIVE_SITE_ID || env.ONEDRIVE_USER_PRINCIPAL_NAME)) {
+        onedriveChannels.push({
+            id: 1,
+            name: 'OneDrive_env',
+            type: 'onedrive',
+            savePath: 'environment variable',
+            tenantId: env.ONEDRIVE_TENANT_ID,
+            clientId: env.ONEDRIVE_CLIENT_ID,
+            clientSecret: env.ONEDRIVE_CLIENT_SECRET,
+            driveId: env.ONEDRIVE_DRIVE_ID || '',
+            siteId: env.ONEDRIVE_SITE_ID || '',
+            userPrincipalName: env.ONEDRIVE_USER_PRINCIPAL_NAME || '',
+            rootPath: env.ONEDRIVE_ROOT_PATH || '',
+            enabled: true,
+            fixed: true,
+        })
+    }
+    for (const od of settingsKV.onedrive?.channels || []) {
+        if (od.savePath === 'environment variable') {
+            if (onedriveChannels[0]) {
+                onedriveChannels[0].enabled = od.enabled
+                onedriveChannels[0].rootPath = od.rootPath
+            }
+            continue
+        }
+        od.id = onedriveChannels.length + 1
+        onedriveChannels.push(od)
+    }
+
+    const onedriveLoadBalance = settingsKV.onedrive?.loadBalance || {
+        enabled: false,
+        channels: [],
+    }
+    onedrive.loadBalance = onedriveLoadBalance
+
+
 
     settings.telegram = telegram
     settings.cfr2 = cfr2
     settings.s3 = s3
+    settings.onedrive = onedrive
 
     return settings;
 }

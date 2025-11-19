@@ -268,6 +268,24 @@ async function uploadChunkToStorage(context, chunkIndex, totalChunks, uploadId, 
                 uploadResult = await uploadSingleChunkToS3Multipart(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
             } else if (uploadChannel === 'telegram') {
                 uploadResult = await uploadSingleChunkToTelegram(context, chunkData, chunkIndex, totalChunks, uploadId, originalFileName, originalFileType);
+            } else if (uploadChannel === 'onedrive') {
+                const completedMetadata = {
+                    ...chunkMetadata,
+                    status: 'completed',
+                    uploadResult: {
+                        storage: 'onedrive',
+                        size: chunkData.byteLength,
+                        completedTime: Date.now()
+                    },
+                    completedTime: Date.now()
+                };
+
+                await db.put(chunkKey, chunkData, {
+                    metadata: completedMetadata,
+                    expirationTtl: 3600
+                });
+
+                uploadResult = { success: true };
             }
 
             if (uploadResult && uploadResult.success) {
@@ -726,6 +744,22 @@ async function retrySingleChunk(context, chunk, uploadChannel, maxRetries = 5, r
                     return await uploadSingleChunkToS3Multipart(context, chunkData, chunk.index, totalChunks, uploadId, originalFileName, originalFileType);
                 } else if (uploadChannel === 'telegram') {
                     return await uploadSingleChunkToTelegram(context, chunkData, chunk.index, totalChunks, uploadId, originalFileName, originalFileType);
+                } else if (uploadChannel === 'onedrive') {
+                    // 对于OneDrive，保留分块数据即可
+                    await db.put(chunk.key, chunkData, {
+                        metadata: {
+                            ...chunkRecord.metadata,
+                            status: 'completed',
+                            uploadResult: {
+                                storage: 'onedrive',
+                                size: chunkData.byteLength,
+                                completedTime: Date.now()
+                            },
+                            completedTime: Date.now()
+                        },
+                        expirationTtl: 3600
+                    });
+                    return { success: true };
                 }
                 return null;
             })();
