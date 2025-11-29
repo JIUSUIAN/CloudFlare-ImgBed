@@ -1,6 +1,6 @@
 <div align="center">
     <a href="https://github.com/MarSeventh/CloudFlare-ImgBed"><img width="80%" alt="logo" src="static/readme/banner.png"/></a>
-    <p><em>🗂️开源文件托管解决方案，支持 Docker 和无服务器部署，支持 Telegram Bot 、 Cloudflare R2 、S3 等多种存储渠道，支持 WebDAV 协议和多种 RESTful API</em></p>
+    <p><em>🗂️开源文件托管解决方案，支持 Docker 和无服务器部署，支持 Telegram Bot 、 Cloudflare R2 、S3 、OneDrive 等多种存储渠道，支持 WebDAV 协议和多种 RESTful API</em></p>
     <p>
         <a href="https://github.com/MarSeventh/CloudFlare-ImgBed/blob/main/README.md">简体中文</a> | <a href="https://github.com/MarSeventh/CloudFlare-ImgBed/blob/main/README_en.md">English</a> | <a href="https://cfbed.sanyue.de">官方网站</a>
     </p>
@@ -130,6 +130,18 @@
 - **Contributors**：感谢以下贡献者对本项目的无私贡献！
 
   [![Contributors](https://contrib.rocks/image?repo=Marseventh/Cloudflare-ImgBed)](https://github.com/MarSeventh/CloudFlare-ImgBed/graphs/contributors)
+
+## OneDrive 存储渠道
+
+- **Azure 应用**：在 Microsoft Entra ID 中创建一个应用，授予 `Files.ReadWrite.All` 和 `offline_access` 等应用权限，并在租户中完成管理员同意。
+- **环境变量**：为 Worker / Pages 或 Docker 容器新增以下变量，用于快速注入默认渠道：
+  - `ONEDRIVE_TENANT_ID`：Azure AD 租户 ID。
+  - `ONEDRIVE_CLIENT_ID`：应用的客户端 ID。
+  - `ONEDRIVE_CLIENT_SECRET`：应用密钥。
+  - `ONEDRIVE_DRIVE_ID`（或 `ONEDRIVE_SITE_ID` / `ONEDRIVE_USER_PRINCIPAL_NAME`）：用于定位目标 OneDrive/SharePoint 驱动器，可三选一。
+  - `ONEDRIVE_ROOT_PATH`：可选，设置文件在 OneDrive 中的根目录（例如 `imgbed`）。
+- **管理端配置**：进入“管理端 -> 系统设置 -> 上传设置”，新增 `onedrive` 类型的渠道即可在面板中可视化管理、负载均衡与限流，同一实例可配置多个 OneDrive 存储桶。
+- **功能特性**：支持常规/分块上传、索引、随机图、删除与移动操作，文件真实内容存储在 OneDrive 中，Cloudflare 仅负责分发与鉴权。
 
 # 5. Star History
 

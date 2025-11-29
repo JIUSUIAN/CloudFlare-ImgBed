@@ -9,6 +9,7 @@ import { handleChunkMerge } from "./chunkMerge";
 import { TelegramAPI } from "../utils/telegramAPI";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
+import { OneDriveClient, buildOneDriveRemotePath } from "../utils/onedriveClient.js";
 
 
 export async function onRequest(context) {  // Contents of context object
@@ -104,6 +105,9 @@ async function processFileUpload(context, formdata = null) {
         case 'external':
             uploadChannel = 'External';
             break;
+        case 'onedrive':
+            uploadChannel = 'OneDrive';
+            break;
         default:
             uploadChannel = 'TelegramNew';
             break;
@@ -192,6 +196,14 @@ async function processFileUpload(context, formdata = null) {
         // --------------------外链渠道----------------------
         const res = await uploadFileToExternal(context, fullId, metadata, returnLink);
         return res;
+    } else if (uploadChannel === 'OneDrive') {
+        // --------------------OneDrive 渠道----------------------
+        const res = await uploadFileToOneDrive(context, fullId, metadata, returnLink);
+        if (res.status === 200 || !autoRetry) {
+            return res;
+        } else {
+            err = await res.text();
+        }
     } else {
         // ----------------Telegram New 渠道-------------------
         const res = await uploadFileToTelegram(context, fullId, metadata, fileExt, fileName, fileType, returnLink);
@@ -369,6 +381,83 @@ async function uploadFileToS3(context, fullId, metadata, returnLink) {
 }
 
 
+// 上传到 OneDrive
+async function uploadFileToOneDrive(context, fullId, metadata, returnLink) {
+    const { env, waitUntil, uploadConfig, securityConfig, url, formdata } = context;
+    const db = getDatabase(env);
+
+    const onedriveSettings = uploadConfig.onedrive || { channels: [] };
+    const odChannels = onedriveSettings.channels || [];
+    const loadBalance = onedriveSettings.loadBalance || { enabled: false };
+    const odChannel = loadBalance.enabled
+        ? odChannels[Math.floor(Math.random() * odChannels.length)]
+        : odChannels[0];
+
+    if (!odChannel) {
+        return createResponse('Error: No OneDrive channel provided', { status: 400 });
+    }
+
+    const file = formdata.get('file');
+    if (!file) {
+        return createResponse('Error: No file provided', { status: 400 });
+    }
+
+    try {
+        const client = new OneDriveClient({
+            tenantId: odChannel.tenantId,
+            clientId: odChannel.clientId,
+            clientSecret: odChannel.clientSecret,
+            driveId: odChannel.driveId,
+            siteId: odChannel.siteId,
+            userPrincipalName: odChannel.userPrincipalName
+        });
+
+        const remotePath = buildOneDriveRemotePath(odChannel, fullId);
+        const uploadResult = await client.uploadFile(file, remotePath);
+
+        metadata.Channel = 'OneDrive';
+        metadata.ChannelName = odChannel.name;
+        metadata.FileSize = ((uploadResult?.size || file.size) / 1024 / 1024).toFixed(2);
+        metadata.OneDriveTenantId = odChannel.tenantId;
+        metadata.OneDriveClientId = odChannel.clientId;
+        metadata.OneDriveClientSecret = odChannel.clientSecret;
+        metadata.OneDriveDriveId = uploadResult?.parentReference?.driveId || odChannel.driveId || '';
+        metadata.OneDriveSiteId = odChannel.siteId || '';
+        metadata.OneDriveUserPrincipalName = odChannel.userPrincipalName || '';
+        metadata.OneDrivePath = remotePath;
+        metadata.OneDriveItemId = uploadResult?.id || '';
+        metadata.OneDriveRootPath = odChannel.rootPath || '';
+        metadata.OneDriveDownloadUrl = uploadResult?.['@microsoft.graph.downloadUrl'] || '';
+
+        const moderateUrl = uploadResult?.['@microsoft.graph.downloadUrl'] || `${url.origin}/file/${fullId}`;
+        if (securityConfig.upload?.moderate?.enabled) {
+            try {
+                metadata.Label = await moderateContent(env, moderateUrl);
+            } catch (moderateError) {
+                console.warn('OneDrive moderate failed:', moderateError);
+            }
+        }
+
+        try {
+            await db.put(fullId, "", { metadata });
+        } catch (error) {
+            return createResponse('Error: Failed to write to database', { status: 500 });
+        }
+
+        waitUntil(endUpload(context, fullId, metadata));
+
+        return createResponse(JSON.stringify([{ src: returnLink }]), {
+            status: 200,
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        });
+    } catch (error) {
+        return createResponse(`Error: Failed to upload to OneDrive - ${error.message}`, { status: 500 });
+    }
+}
+
+
 // 上传到Telegram
 async function uploadFileToTelegram(context, fullId, metadata, fileExt, fileName, fileType, returnLink) {
     const { env, waitUntil, uploadConfig, url, formdata } = context;
@@ -527,7 +616,7 @@ async function tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, 
     const { env, url, formdata } = context;
 
     // 渠道列表
-    const channelList = ['CloudflareR2', 'TelegramNew', 'S3'];
+    const channelList = ['CloudflareR2', 'TelegramNew', 'S3', 'OneDrive'];
     const errMessages = {};
     errMessages[uploadChannel] = 'Error: ' + uploadChannel + err;
 
@@ -540,6 +629,8 @@ async function tryRetry(err, context, uploadChannel, fullId, metadata, fileExt, 
                 res = await uploadFileToTelegram(context, fullId, metadata, fileExt, fileName, fileType, returnLink);
             } else if (channelList[i] === 'S3') {
                 res = await uploadFileToS3(context, fullId, metadata, returnLink);
+            } else if (channelList[i] === 'OneDrive') {
+                res = await uploadFileToOneDrive(context, fullId, metadata, returnLink);
             }
 
             if (res.status === 200) {

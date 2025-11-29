@@ -1,8 +1,9 @@
 /* ========== 分块合并处理 ========== */
-import { createResponse, getUploadIp, getIPAddress, selectConsistentChannel, buildUniqueFileId, endUpload } from './uploadTools';
+import { createResponse, getUploadIp, getIPAddress, selectConsistentChannel, buildUniqueFileId, endUpload, moderateContent } from './uploadTools';
 import { retryFailedChunks, cleanupFailedMultipartUploads, checkChunkUploadStatuses, cleanupChunkData, cleanupUploadSession } from './chunkUpload';
 import { S3Client, CompleteMultipartUploadCommand } from "@aws-sdk/client-s3";
 import { getDatabase } from '../utils/databaseAdapter.js';
+import { OneDriveClient, buildOneDriveRemotePath } from "../utils/onedriveClient.js";
 
 // 处理分块合并
 export async function handleChunkMerge(context) {
@@ -209,6 +210,8 @@ async function handleChannelBasedMerge(context, uploadId, totalChunks, originalF
             result = await mergeR2ChunksInfo(context, uploadId, completedChunks, metadata);
         } else if (uploadChannel === 's3') {
             result = await mergeS3ChunksInfo(context, uploadId, completedChunks, metadata);
+        } else if (uploadChannel === 'onedrive') {
+            result = await mergeOneDriveChunks(context, uploadId, completedChunks, metadata);
         } else if (uploadChannel === 'telegram') {
             result = await mergeTelegramChunksInfo(context, uploadId, completedChunks, metadata);
         } else {
@@ -394,6 +397,96 @@ async function mergeS3ChunksInfo(context, uploadId, completedChunks, metadata) {
 
     } catch (error) {
         throw new Error(`S3 merge failed: ${error.message}`);
+    }
+}
+
+// 合并 OneDrive 分块信息
+async function mergeOneDriveChunks(context, uploadId, completedChunks, metadata) {
+    const { env, waitUntil, uploadConfig, securityConfig, url } = context;
+    const db = getDatabase(env);
+
+    try {
+        const onedriveSettings = uploadConfig.onedrive || { channels: [] };
+        const odChannels = onedriveSettings.channels || [];
+        const odChannel = selectConsistentChannel(odChannels, uploadId, onedriveSettings.loadBalance?.enabled);
+
+        if (!odChannel) {
+            throw new Error('No OneDrive channel provided');
+        }
+
+        const finalFileId = await buildUniqueFileId(context, metadata.FileName, metadata.FileType);
+        const remotePath = buildOneDriveRemotePath(odChannel, finalFileId);
+        const client = new OneDriveClient({
+            tenantId: odChannel.tenantId,
+            clientId: odChannel.clientId,
+            clientSecret: odChannel.clientSecret,
+            driveId: odChannel.driveId,
+            siteId: odChannel.siteId,
+            userPrincipalName: odChannel.userPrincipalName
+        });
+
+        const sortedChunks = completedChunks.sort((a, b) => a.index - b.index);
+        const totalSize = sortedChunks.reduce((sum, chunk) => sum + (chunk.uploadResult?.size || chunk.chunkSize || 0), 0);
+
+        const session = await client.createUploadSession(remotePath);
+        let offset = 0;
+        let uploadResult = null;
+
+        for (const chunk of sortedChunks) {
+            const chunkRecord = await db.getWithMetadata(chunk.key, { type: 'arrayBuffer' });
+            if (!chunkRecord || !chunkRecord.value) {
+                throw new Error(`Chunk data missing for index ${chunk.index}`);
+            }
+            const chunkBuffer = chunkRecord.value;
+            const chunkLength = chunkBuffer.byteLength;
+            const end = offset + chunkLength - 1;
+            uploadResult = await client.uploadChunkToSession(session.uploadUrl, chunkBuffer, offset, end, totalSize);
+            offset += chunkLength;
+        }
+
+        if (!uploadResult) {
+            throw new Error('OneDrive upload session did not finish correctly');
+        }
+
+        metadata.Channel = 'OneDrive';
+        metadata.ChannelName = odChannel.name;
+        metadata.FileSize = (totalSize / 1024 / 1024).toFixed(2);
+        metadata.OneDriveTenantId = odChannel.tenantId;
+        metadata.OneDriveClientId = odChannel.clientId;
+        metadata.OneDriveClientSecret = odChannel.clientSecret;
+        metadata.OneDriveDriveId = uploadResult.parentReference?.driveId || odChannel.driveId || '';
+        metadata.OneDriveSiteId = odChannel.siteId || '';
+        metadata.OneDriveUserPrincipalName = odChannel.userPrincipalName || '';
+        metadata.OneDrivePath = remotePath;
+        metadata.OneDriveItemId = uploadResult.id || '';
+        metadata.OneDriveRootPath = odChannel.rootPath || '';
+        metadata.OneDriveDownloadUrl = uploadResult['@microsoft.graph.downloadUrl'] || '';
+
+        const moderateUrl = uploadResult['@microsoft.graph.downloadUrl'] || `${url.origin}/file/${finalFileId}`;
+        if (securityConfig.upload?.moderate?.enabled) {
+            try {
+                metadata.Label = await moderateContent(env, moderateUrl);
+            } catch (moderateError) {
+                console.warn('OneDrive merge moderate failed:', moderateError);
+            }
+        }
+
+        await db.put(finalFileId, '', { metadata });
+
+        waitUntil(endUpload(context, finalFileId, metadata));
+
+        const returnFormat = url.searchParams.get('returnFormat') || 'default';
+        const updatedReturnLink = returnFormat === 'full'
+            ? `${url.origin}/file/${finalFileId}`
+            : `/file/${finalFileId}`;
+
+        return {
+            success: true,
+            result: [{ 'src': updatedReturnLink }]
+        };
+
+    } catch (error) {
+        throw new Error(`OneDrive merge failed: ${error.message}`);
     }
 }
 
